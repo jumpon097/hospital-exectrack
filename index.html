@@ -1,0 +1,1007 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ระบบติดตามข้อสั่งการผู้บริหาร (ExecTrack)</title>
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#809bce">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- Phosphor Icons (Modern Icons) -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    
+    <!-- SweetAlert2 (Professional Alerts) -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    
+    <!-- SortableJS (Kanban Drag & Drop - Works on Mobile) -->
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+
+    <!-- Vue 3 (CDN) - สำหรับจัดการ State ที่ซับซ้อนในไฟล์เดียวอย่างเป็นระเบียบ -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: { 
+                        primary: '#809bce',         /* ฟ้าพาสเทล (Pastel Blue) */
+                        'primary-dark': '#6a87b8',  /* สีฟ้าพาสเทลเข้มขึ้นเล็กน้อยสำหรับปุ่มเวลา Hover */
+                        secondary: '#b8e0d2',       /* เขียวมิ้นต์พาสเทล */
+                        accent: '#ffccb6'           /* พีชพาสเทล */
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* ซ่อน Scrollbar แต่ยัง Scroll ได้ */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        .kanban-column { min-height: 50vh; }
+        .ghost-card { opacity: 0.4; background-color: #f3f4f6; }
+        
+        [v-cloak] { display: none; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans" id="app" v-cloak>
+
+    <!-- LOADING OVERLAY -->
+    <div v-if="isLoading" class="fixed inset-0 z-50 flex items-center justify-center bg-white bg-opacity-80">
+        <div class="flex flex-col items-center">
+            <i class="ph-duotone ph-spinner-gap animate-spin text-5xl text-primary mb-4"></i>
+            <span class="text-lg font-medium text-primary">กำลังโหลดข้อมูล...</span>
+        </div>
+    </div>
+
+    <!-- LOGIN SCREEN -->
+    <div v-if="!user" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-100 to-blue-200 p-4">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-md">
+            <div class="text-center mb-8">
+                <i class="ph-duotone ph-hospital text-6xl text-primary mb-2"></i>
+                <h1 class="text-2xl font-bold text-gray-800">ระบบติดตามข้อสั่งการผู้บริหาร</h1>
+                <p class="text-gray-500 mt-1">โรงพยาบาลศูนย์</p>
+            </div>
+            <form @submit.prevent="login">
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">อีเมลผู้ใช้งาน</label>
+                    <input type="email" v-model="loginEmail" required class="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-primary focus:border-primary transition" placeholder="email@hospital.com">
+                </div>
+                <button type="submit" class="w-full bg-primary hover:bg-primary-dark text-white font-semibold py-3 rounded-lg transition shadow-md flex justify-center items-center">
+                    <span>เข้าสู่ระบบ</span>
+                    <i class="ph-bold ph-arrow-right ml-2"></i>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- MAIN APP SHELL -->
+    <div v-else class="flex h-screen overflow-hidden">
+        
+        <!-- SIDEBAR (Desktop) -->
+        <aside class="hidden md:flex flex-col w-64 bg-white border-r shadow-sm z-10">
+            <div class="p-6 flex items-center gap-3 border-b">
+                <div v-if="!appConfig.logo" class="bg-primary text-white p-2 rounded-lg flex-shrink-0"><i class="ph-bold ph-stethoscope text-xl"></i></div>
+                <img v-else :src="appConfig.logo" class="h-10 w-10 object-contain rounded-lg flex-shrink-0" alt="Logo">
+                <h2 class="font-bold text-lg text-primary tracking-tight leading-tight truncate" :title="appConfig.name">{{ appConfig.name || 'ExecTrack' }}</h2>
+            </div>
+            
+            <div class="p-4 flex flex-col gap-2 flex-grow">
+                <nav-item icon="ph-squares-four" text="ภาพรวม (Dashboard)" view="dashboard" :current="currentView" @change="currentView = 'dashboard'"></nav-item>
+                <nav-item icon="ph-kanban" text="บอร์ดงาน (Kanban)" view="kanban" :current="currentView" @change="currentView = 'kanban'"></nav-item>
+                <nav-item icon="ph-list-dashes" text="รายการงานทั้งหมด" view="list" :current="currentView" @change="currentView = 'list'"></nav-item>
+                
+                <hr class="my-2 border-gray-100" v-if="user.role === 'Admin'">
+                <nav-item v-if="user.role === 'Admin'" icon="ph-gear" text="ตั้งค่าระบบ" view="settings" :current="currentView" @change="currentView = 'settings'"></nav-item>
+            </div>
+            
+            <div class="p-4 border-t bg-gray-50 flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-primary font-bold">
+                    {{ user.name.charAt(0) }}
+                </div>
+                <div class="overflow-hidden">
+                    <p class="text-sm font-bold truncate">{{ user.name }}</p>
+                    <p class="text-xs text-gray-500">{{ user.role }} | {{ user.unit }}</p>
+                </div>
+                <button @click="logout" class="ml-auto text-gray-400 hover:text-red-500"><i class="ph-bold ph-sign-out text-xl"></i></button>
+            </div>
+        </aside>
+
+        <!-- MAIN CONTENT -->
+        <main class="flex-1 flex flex-col h-screen relative bg-gray-50">
+            
+            <!-- HEADER (Mobile) -->
+            <header class="md:hidden bg-white shadow-sm px-4 py-3 flex justify-between items-center z-10">
+                <div class="flex items-center gap-2 overflow-hidden">
+                    <div v-if="!appConfig.logo" class="bg-primary text-white p-1.5 rounded-md flex-shrink-0"><i class="ph-bold ph-stethoscope text-lg"></i></div>
+                    <img v-else :src="appConfig.logo" class="h-8 w-8 object-contain rounded-md flex-shrink-0" alt="Logo">
+                    <h1 class="font-bold text-base text-primary truncate">{{ appConfig.name || 'ExecTrack' }}</h1>
+                </div>
+                <div class="flex items-center gap-3 flex-shrink-0">
+                    <span class="text-xs font-semibold px-2 py-1 bg-blue-100 text-blue-800 rounded-full">{{ user.role }}</span>
+                    <button @click="logout" class="text-gray-500"><i class="ph-bold ph-sign-out text-xl"></i></button>
+                </div>
+            </header>
+
+            <!-- TOP ACTION BAR -->
+            <div class="bg-white px-6 py-4 border-b flex justify-between items-center shadow-sm z-10">
+                <h2 class="text-xl font-bold text-gray-800 hidden md:block">
+                    {{ 
+                        currentView === 'dashboard' ? 'ภาพรวมการดำเนินงาน' : 
+                        (currentView === 'kanban' ? 'บอร์ดติดตามสถานะ' : 
+                        (currentView === 'settings' ? 'ตั้งค่าระบบ' : 'รายการข้อสั่งการ')) 
+                    }}
+                </h2>
+                
+                <div class="flex gap-2 w-full md:w-auto" v-if="currentView !== 'settings'">
+                    <div class="relative flex-grow md:flex-grow-0">
+                        <i class="ph-bold ph-magnifying-glass absolute left-3 top-2.5 text-gray-400"></i>
+                        <input type="text" v-model="searchQuery" placeholder="ค้นหางาน..." class="w-full md:w-64 pl-10 pr-4 py-2 border rounded-full text-sm focus:ring-primary focus:border-primary">
+                    </div>
+                    <button v-if="canCreateTask" @click="openTaskModal()" class="bg-primary text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-primary-dark flex items-center gap-1 shadow-md whitespace-nowrap">
+                        <i class="ph-bold ph-plus"></i> <span class="hidden md:inline">เพิ่มงานใหม่</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- SCROLLABLE CONTENT AREA -->
+            <div class="flex-1 overflow-y-auto p-4 md:p-6 no-scrollbar pb-24 md:pb-6">
+                
+                <!-- DASHBOARD VIEW -->
+                <div v-show="currentView === 'dashboard'" class="space-y-6">
+                    <!-- Stat Cards -->
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <stat-card title="งานทั้งหมด" :value="tasks.length" icon="ph-files" color="blue"></stat-card>
+                        <stat-card title="กำลังดำเนินงาน" :value="stats.inProgress" icon="ph-spinner-gap" color="yellow"></stat-card>
+                        <stat-card title="เกินกำหนดเวลา!" :value="stats.overdue" icon="ph-warning-circle" color="red"></stat-card>
+                        <stat-card title="เสร็จสิ้นแล้ว" :value="stats.completed" icon="ph-check-circle" color="green"></stat-card>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <!-- Chart 1: By Status -->
+                        <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                            <h3 class="font-bold text-gray-700 mb-4">สัดส่วนสถานะงาน</h3>
+                            <div class="relative h-64"><canvas id="statusChart"></canvas></div>
+                        </div>
+                        <!-- Chart 2: By Unit -->
+                        <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                            <h3 class="font-bold text-gray-700 mb-4">งานแยกตามหน่วยงานที่รับผิดชอบ</h3>
+                            <div class="relative h-64"><canvas id="unitChart"></canvas></div>
+                        </div>
+                    </div>
+
+                    <!-- Overdue Table -->
+                    <div v-if="overdueTasks.length > 0" class="bg-white rounded-2xl shadow-sm border border-red-200 overflow-hidden">
+                        <div class="bg-red-50 px-5 py-3 border-b border-red-100 flex items-center gap-2">
+                            <i class="ph-fill ph-warning-circle text-red-500 text-xl"></i>
+                            <h3 class="font-bold text-red-700">งานที่เกินกำหนดเวลา (Overdue)</h3>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm text-left">
+                                <thead class="bg-gray-50 text-gray-600">
+                                    <tr>
+                                        <th class="px-4 py-3">รหัสงาน</th>
+                                        <th class="px-4 py-3">ชื่องาน</th>
+                                        <th class="px-4 py-3">ผู้รับผิดชอบ</th>
+                                        <th class="px-4 py-3 text-red-600">กำหนดส่ง</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="t in overdueTasks" :key="t.task_id" class="border-b hover:bg-gray-50 cursor-pointer" @click="viewTask(t)">
+                                        <td class="px-4 py-3 font-mono text-xs">{{ t.task_code }}</td>
+                                        <td class="px-4 py-3 font-medium">{{ t.title }}</td>
+                                        <td class="px-4 py-3">{{ t.assigned_unit }}</td>
+                                        <td class="px-4 py-3 text-red-500 font-bold">{{ formatDate(t.due_date) }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- KANBAN VIEW -->
+                <div v-show="currentView === 'kanban'" class="h-full flex flex-col">
+                    <!-- Filters -->
+                    <div class="flex gap-2 overflow-x-auto pb-4 no-scrollbar">
+                        <select v-model="filterUnit" class="bg-white border rounded-lg px-3 py-1.5 text-sm shadow-sm min-w-[150px]">
+                            <option value="">ทุกหน่วยงาน</option>
+                            <option v-for="u in meta.units" :value="u">{{u}}</option>
+                        </select>
+                        <select v-model="filterPriority" class="bg-white border rounded-lg px-3 py-1.5 text-sm shadow-sm min-w-[120px]">
+                            <option value="">ทุกความสำคัญ</option>
+                            <option value="High">สูง (High)</option>
+                            <option value="Medium">ปานกลาง (Medium)</option>
+                            <option value="Low">ต่ำ (Low)</option>
+                        </select>
+                    </div>
+
+                    <!-- Kanban Board -->
+                    <div class="flex-1 flex gap-4 overflow-x-auto items-start pb-4">
+                        <kanban-col v-for="col in kanbanColumns" :key="col.id" 
+                            :status="col.id" :title="col.title" :color="col.color" :icon="col.icon"
+                            :tasks="filteredTasks.filter(t => t.status === col.id)"
+                            @view-task="viewTask"></kanban-col>
+                    </div>
+                </div>
+
+                <!-- LIST VIEW -->
+                <div v-show="currentView === 'list'" class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm text-left whitespace-nowrap">
+                            <thead class="bg-gray-50 text-gray-600 border-b">
+                                <tr>
+                                    <th class="px-4 py-3">รหัสงาน</th>
+                                    <th class="px-4 py-3">ชื่องาน</th>
+                                    <th class="px-4 py-3">สถานะ</th>
+                                    <th class="px-4 py-3">หน่วยรับผิดชอบ</th>
+                                    <th class="px-4 py-3">กำหนดเสร็จ</th>
+                                    <th class="px-4 py-3 text-center">จัดการ</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="t in filteredTasks" :key="t.task_id" class="border-b hover:bg-gray-50">
+                                    <td class="px-4 py-3 font-mono text-xs text-gray-500">{{ t.task_code }}</td>
+                                    <td class="px-4 py-3">
+                                        <div class="font-medium text-gray-800 max-w-[200px] md:max-w-md truncate">{{ t.title }}</div>
+                                        <div class="text-xs text-gray-500 mt-1 flex gap-2">
+                                            <span :class="{'text-red-500': t.priority==='High'}"><i class="ph-fill ph-flag"></i> {{ t.priority }}</span>
+                                            <span><i class="ph ph-percent"></i> {{ t.progress_percent || 0 }}%</span>
+                                        </div>
+                                    </td>
+                                    <td class="px-4 py-3">
+                                        <span class="px-2 py-1 rounded-full text-xs font-semibold" :class="statusColorClass(t.status)">
+                                            {{ statusThai(t.status) }}
+                                        </span>
+                                    </td>
+                                    <td class="px-4 py-3 text-gray-600">{{ t.assigned_unit }}</td>
+                                    <td class="px-4 py-3" :class="isOverdue(t) ? 'text-red-500 font-bold' : 'text-gray-600'">{{ formatDate(t.due_date) }}</td>
+                                    <td class="px-4 py-3 text-center">
+                                        <button @click="viewTask(t)" class="text-primary hover:bg-blue-50 p-1.5 rounded-lg transition"><i class="ph-bold ph-eye text-lg"></i></button>
+                                        <button v-if="canEditTask(t)" @click="openTaskModal(t)" class="text-amber-500 hover:bg-amber-50 p-1.5 rounded-lg transition ml-1"><i class="ph-bold ph-pencil-simple text-lg"></i></button>
+                                    </td>
+                                </tr>
+                                <tr v-if="filteredTasks.length === 0">
+                                    <td colspan="6" class="text-center py-8 text-gray-400">ไม่พบข้อมูล</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- SETTINGS VIEW -->
+                <div v-show="currentView === 'settings'" class="max-w-2xl mx-auto space-y-6">
+                    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+                        <h3 class="text-lg font-bold text-gray-800 mb-4 border-b pb-2"><i class="ph-bold ph-buildings mr-2 text-primary"></i>ข้อมูลองค์กร</h3>
+                        
+                        <form @submit.prevent="saveSystemSettings" class="space-y-5">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">ชื่อโรงพยาบาล / ชื่อระบบ</label>
+                                <input type="text" v-model="settingForm.name" required class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary focus:border-primary transition">
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">โลโก้องค์กร (รูปภาพ)</label>
+                                <div class="flex items-center gap-6">
+                                    <!-- Logo Preview -->
+                                    <div class="w-24 h-24 rounded-xl border-2 border-dashed border-gray-300 flex items-center justify-center bg-gray-50 overflow-hidden flex-shrink-0">
+                                        <img v-if="settingForm.logo" :src="settingForm.logo" class="w-full h-full object-contain">
+                                        <i v-else class="ph-duotone ph-image text-3xl text-gray-400"></i>
+                                    </div>
+                                    <div class="flex-1">
+                                        <input type="file" accept="image/png, image/jpeg, image/gif" @change="handleLogoUpload" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-primary hover:file:bg-blue-100 transition cursor-pointer">
+                                        <p class="text-xs text-gray-400 mt-2">รองรับไฟล์ PNG, JPG แนะนำขนาด 200x200px (ระบบจะย่อขนาดอัตโนมัติ)</p>
+                                        <button v-if="settingForm.logo" type="button" @click="settingForm.logo = ''" class="text-xs text-red-500 mt-2 hover:underline">ลบรูปภาพ</button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="pt-4 border-t flex justify-end">
+                                <button type="submit" class="bg-primary text-white px-6 py-2 rounded-lg font-semibold hover:bg-primary-dark transition shadow-md flex items-center gap-2">
+                                    <i class="ph-bold ph-floppy-disk"></i> บันทึกการตั้งค่า
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- BOTTOM NAV (Mobile) -->
+            <nav class="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t flex justify-around py-3 pb-safe z-20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+                <mobile-nav-item icon="ph-squares-four" text="ภาพรวม" view="dashboard" :current="currentView" @change="currentView = 'dashboard'"></mobile-nav-item>
+                <mobile-nav-item icon="ph-kanban" text="บอร์ด" view="kanban" :current="currentView" @change="currentView = 'kanban'"></mobile-nav-item>
+                <mobile-nav-item icon="ph-list-dashes" text="รายการ" view="list" :current="currentView" @change="currentView = 'list'"></mobile-nav-item>
+                <mobile-nav-item v-if="user?.role === 'Admin'" icon="ph-gear" text="ตั้งค่า" view="settings" :current="currentView" @change="currentView = 'settings'"></mobile-nav-item>
+            </nav>
+        </main>
+
+    </div>
+
+    <!-- MODAL: TASK FORM (Create/Edit) -->
+    <div v-if="showFormModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm">
+        <div class="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl">
+            <div class="px-6 py-4 border-b flex justify-between items-center bg-gray-50 rounded-t-2xl">
+                <h3 class="text-lg font-bold text-gray-800">{{ editingTask.task_id ? 'แก้ไขข้อสั่งการ' : 'สร้างข้อสั่งการใหม่' }}</h3>
+                <button @click="showFormModal = false" class="text-gray-400 hover:text-gray-600"><i class="ph-bold ph-x text-xl"></i></button>
+            </div>
+            <div class="p-6 overflow-y-auto flex-1">
+                <form id="taskForm" @submit.prevent="saveTask" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">หัวข้อ/ชื่องาน *</label>
+                        <input type="text" v-model="editingTask.title" required class="w-full px-3 py-2 border rounded-lg focus:ring-1 focus:ring-primary">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">รายละเอียด</label>
+                        <textarea v-model="editingTask.description" rows="3" class="w-full px-3 py-2 border rounded-lg focus:ring-1 focus:ring-primary"></textarea>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">วันที่สั่งการ *</label>
+                            <input type="date" v-model="editingTask.order_date" required class="w-full px-3 py-2 border rounded-lg">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">กำหนดส่ง *</label>
+                            <input type="date" v-model="editingTask.due_date" required class="w-full px-3 py-2 border rounded-lg">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">ผู้สั่งการ</label>
+                            <input type="text" v-model="editingTask.assigned_by" class="w-full px-3 py-2 border rounded-lg">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">หน่วยงานรับผิดชอบ *</label>
+                            <select v-model="editingTask.assigned_unit" required class="w-full px-3 py-2 border rounded-lg">
+                                <option value="">เลือกหน่วยงาน</option>
+                                <option v-for="u in meta.units" :value="u">{{u}}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">หมวดหมู่งาน</label>
+                            <select v-model="editingTask.category" class="w-full px-3 py-2 border rounded-lg">
+                                <option value="">เลือกหมวดหมู่</option>
+                                <option v-for="c in meta.categories" :value="c">{{c}}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">ความสำคัญ *</label>
+                            <select v-model="editingTask.priority" required class="w-full px-3 py-2 border rounded-lg">
+                                <option value="High">สูง (High)</option>
+                                <option value="Medium">ปานกลาง (Medium)</option>
+                                <option value="Low">ต่ำ (Low)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <hr class="my-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 bg-blue-50 p-4 rounded-xl">
+                        <div>
+                            <label class="block text-sm font-medium text-primary mb-1">สถานะปัจจุบัน</label>
+                            <select v-model="editingTask.status" class="w-full px-3 py-2 border rounded-lg font-semibold text-primary">
+                                <option value="Pending">รอดำเนินการ (Pending)</option>
+                                <option value="In Progress">กำลังดำเนินงาน (In Progress)</option>
+                                <option value="Review">รอตรวจรับ/รอทบทวน (Review)</option>
+                                <option value="Completed">เสร็จสิ้น (Completed)</option>
+                                <option value="Cancelled">ยกเลิก (Cancelled)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-primary mb-1">ความคืบหน้า (%)</label>
+                            <input type="number" min="0" max="100" v-model="editingTask.progress_percent" class="w-full px-3 py-2 border rounded-lg">
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="px-6 py-4 border-t flex justify-end gap-3 bg-gray-50 rounded-b-2xl">
+                <button type="button" @click="showFormModal = false" class="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded-lg font-medium transition">ยกเลิก</button>
+                <button type="submit" form="taskForm" class="px-6 py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark transition shadow-md">บันทึกข้อมูล</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: TASK DETAIL & TIMELINE -->
+    <div v-if="showDetailModal && selectedTask" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm">
+        <div class="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+            <div class="px-6 py-4 border-b flex justify-between items-start bg-gray-50">
+                <div>
+                    <span class="text-xs font-mono bg-gray-200 text-gray-600 px-2 py-1 rounded">{{ selectedTask.task_code }}</span>
+                    <h3 class="text-xl font-bold text-gray-800 mt-2">{{ selectedTask.title }}</h3>
+                </div>
+                <button @click="showDetailModal = false" class="text-gray-400 hover:text-gray-600"><i class="ph-bold ph-x text-xl"></i></button>
+            </div>
+            <div class="p-6 overflow-y-auto flex-1 bg-white">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    
+                    <!-- Left: Details -->
+                    <div class="md:col-span-2 space-y-4">
+                        <div>
+                            <h4 class="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">รายละเอียด</h4>
+                            <p class="text-gray-700 whitespace-pre-wrap">{{ selectedTask.description || '-' }}</p>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded-xl border border-gray-100">
+                            <div>
+                                <p class="text-xs text-gray-500">หน่วยงานรับผิดชอบ</p>
+                                <p class="font-semibold">{{ selectedTask.assigned_unit }}</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-gray-500">ผู้สั่งการ</p>
+                                <p class="font-semibold">{{ selectedTask.assigned_by || '-' }}</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-gray-500">วันที่สั่ง</p>
+                                <p class="font-medium">{{ formatDate(selectedTask.order_date) }}</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-gray-500">กำหนดส่ง</p>
+                                <p class="font-medium" :class="{'text-red-500 font-bold': isOverdue(selectedTask)}">{{ formatDate(selectedTask.due_date) }}</p>
+                            </div>
+                        </div>
+
+                        <!-- Quick Update Section (For Assignees/Secretaries) -->
+                        <div v-if="canEditTask(selectedTask)" class="bg-blue-50 p-4 rounded-xl border border-blue-100 mt-6">
+                            <h4 class="text-sm font-bold text-primary mb-3"><i class="ph-bold ph-lightning"></i> อัปเดตความคืบหน้าด่วน</h4>
+                            <div class="flex gap-2">
+                                <select v-model="quickUpdate.status" class="flex-1 px-3 py-2 rounded-lg border text-sm">
+                                    <option value="Pending">Pending</option>
+                                    <option value="In Progress">In Progress</option>
+                                    <option value="Review">Review</option>
+                                    <option value="Completed">Completed</option>
+                                </select>
+                                <input type="number" v-model="quickUpdate.percent" placeholder="%" class="w-20 px-3 py-2 rounded-lg border text-sm text-center">
+                                <button @click="submitQuickUpdate" class="bg-primary text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-primary-dark transition">อัปเดต</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Timeline / Status -->
+                    <div class="border-l pl-0 md:pl-6 pt-6 md:pt-0 border-t md:border-t-0 border-gray-100">
+                        <div class="mb-6">
+                            <h4 class="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">สถานะปัจจุบัน</h4>
+                            <span class="px-3 py-1.5 rounded-full text-sm font-semibold" :class="statusColorClass(selectedTask.status)">
+                                {{ statusThai(selectedTask.status) }} ({{ selectedTask.progress_percent || 0 }}%)
+                            </span>
+                            
+                            <!-- Progress bar -->
+                            <div class="w-full bg-gray-200 rounded-full h-2 mt-3">
+                                <div class="bg-primary h-2 rounded-full transition-all duration-500" :style="{ width: (selectedTask.progress_percent || 0) + '%' }"></div>
+                            </div>
+                        </div>
+
+                        <h4 class="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">ไทม์ไลน์การดำเนินงาน</h4>
+                        <div class="space-y-4 relative before:absolute before:inset-0 before:ml-2 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-300 before:to-transparent">
+                            
+                            <div v-if="taskTimeline.length === 0" class="text-sm text-gray-400 text-center py-4 relative z-10 bg-white">ไม่มีประวัติการอัปเดต</div>
+                            
+                            <!-- Timeline Item -->
+                            <div v-for="log in taskTimeline" :key="log.update_id" class="relative z-10 flex items-start gap-3">
+                                <div class="w-5 h-5 rounded-full bg-blue-100 border-2 border-primary flex-shrink-0 mt-0.5"></div>
+                                <div class="flex-1 bg-gray-50 rounded-lg p-3 border border-gray-100 text-sm">
+                                    <div class="font-bold text-gray-800">{{ statusThai(log.status_changed_to) }} <span class="text-primary text-xs ml-1">{{ log.progress_percent }}%</span></div>
+                                    <div class="text-xs text-gray-500 mt-1"><i class="ph ph-clock"></i> {{ formatDateTime(log.updated_at) }}</div>
+                                    <div class="text-gray-600 mt-2 text-xs italic">"{{ log.update_detail }}"</div>
+                                    <div class="text-[10px] text-gray-400 mt-2 text-right">- อัปเดตโดย {{ log.updated_by }}</div>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t flex justify-between items-center bg-gray-50">
+                <button v-if="canEditTask(selectedTask) && user.role === 'Admin'" @click="deleteTask(selectedTask)" class="text-red-500 hover:text-red-700 text-sm font-semibold flex items-center gap-1"><i class="ph-bold ph-trash"></i> ลบงาน</button>
+                <div v-else></div>
+                <div class="flex gap-2">
+                    <button @click="showDetailModal = false" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg font-medium hover:bg-gray-300 transition">ปิด</button>
+                    <button v-if="canEditTask(selectedTask)" @click="showDetailModal=false; openTaskModal(selectedTask);" class="px-4 py-2 bg-primary text-white rounded-lg font-medium hover:bg-primary-dark transition shadow-md">แก้ไขแบบเต็ม</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</body>
+
+<!-- Vue Components & Main Logic -->
+<script>
+    // ** ข้อมูลสำคัญ: วาง URL Web App ของคุณที่นี่ **
+    const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbwiQTyiTxppuDRLcHwI10qFVfGRKmSNTDfTEauJ_943Z7Yvsp1ghSg5Wj9GBDU1DJjj/exec';
+
+    // Vue App Initialization
+    const { createApp, ref, computed, onMounted, nextTick, watch } = Vue;
+
+    const app = createApp({
+        setup() {
+            // State
+            const user = ref(JSON.parse(localStorage.getItem('execUser')) || null);
+            const loginEmail = ref('');
+            const isLoading = ref(false);
+            const currentView = ref('dashboard');
+            const tasks = ref([]);
+            const meta = ref({ units: [], categories: [], workTypes: [] });
+            const appConfig = ref({ name: 'โรงพยาบาลศูนย์', logo: '' });
+            
+            // Filters & Search
+            const searchQuery = ref('');
+            const filterUnit = ref('');
+            const filterPriority = ref('');
+
+            // Modals & Forms
+            const showFormModal = ref(false);
+            const showDetailModal = ref(false);
+            const editingTask = ref({});
+            const selectedTask = ref(null);
+            const taskTimeline = ref([]);
+            const quickUpdate = ref({ status: '', percent: 0 });
+
+            // Settings Form State
+            const settingForm = ref({ name: '', logo: '' });
+
+            // Kanban config
+            const kanbanColumns = [
+                { id: 'Pending', title: 'รอดำเนินการ', color: 'bg-gray-100 text-gray-700', icon: 'ph-clock' },
+                { id: 'In Progress', title: 'กำลังดำเนินงาน', color: 'bg-blue-100 text-blue-800', icon: 'ph-spinner-gap' },
+                { id: 'Review', title: 'รอทบทวน/ตรวจรับ', color: 'bg-yellow-100 text-yellow-800', icon: 'ph-magnifying-glass' },
+                { id: 'Completed', title: 'เสร็จสิ้น', color: 'bg-green-100 text-green-800', icon: 'ph-check-circle' }
+            ];
+
+            // Computed Properties
+            const filteredTasks = computed(() => {
+                return tasks.value.filter(t => {
+                    const matchSearch = (t.title || '').toLowerCase().includes(searchQuery.value.toLowerCase()) || 
+                                        (t.task_code || '').toLowerCase().includes(searchQuery.value.toLowerCase());
+                    const matchUnit = filterUnit.value === '' || t.assigned_unit === filterUnit.value;
+                    const matchPriority = filterPriority.value === '' || t.priority === filterPriority.value;
+                    return matchSearch && matchUnit && matchPriority;
+                });
+            });
+
+            const stats = computed(() => {
+                const now = new Date();
+                let inProgress = 0, completed = 0, overdue = 0;
+                
+                tasks.value.forEach(t => {
+                    if (t.status === 'Completed') completed++;
+                    else if (t.status === 'In Progress') inProgress++;
+                    
+                    if (t.status !== 'Completed' && t.status !== 'Cancelled') {
+                        const due = new Date(t.due_date);
+                        if (due < now && t.due_date) overdue++;
+                    }
+                });
+                return { inProgress, completed, overdue };
+            });
+
+            const overdueTasks = computed(() => {
+                const now = new Date();
+                return tasks.value.filter(t => t.status !== 'Completed' && t.status !== 'Cancelled' && new Date(t.due_date) < now)
+                                   .sort((a,b) => new Date(a.due_date) - new Date(b.due_date));
+            });
+
+            const canCreateTask = computed(() => {
+                return user.value && ['Admin', 'Secretary'].includes(user.value.role);
+            });
+
+            // Methods
+            const apiCall = async (action, payload = {}) => {
+                try {
+                    const response = await fetch(GAS_API_URL, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            action: action,
+                            payload: payload,
+                            userEmail: user.value ? user.value.email : ''
+                        })
+                    });
+                    const result = await response.json();
+                    if (!result.success) throw new Error(result.error);
+                    return result.data;
+                } catch (error) {
+                    Swal.fire('ข้อผิดพลาด', error.message || 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้', 'error');
+                    throw error;
+                }
+            };
+
+            const login = async () => {
+                isLoading.value = true;
+                try {
+                    const data = await apiCall('login', { email: loginEmail.value });
+                    user.value = data.user;
+                    localStorage.setItem('execUser', JSON.stringify(data.user));
+                    await loadInitialData();
+                } catch(e) {}
+                finally { isLoading.value = false; }
+            };
+
+            const logout = () => {
+                user.value = null;
+                localStorage.removeItem('execUser');
+                tasks.value = [];
+            };
+
+            const loadInitialData = async () => {
+                isLoading.value = true;
+                try {
+                    const data = await apiCall('getInitialData');
+                    tasks.value = data.tasks;
+                    meta.value = data.meta;
+                    
+                    if(data.meta.appConfig) {
+                        appConfig.value = data.meta.appConfig;
+                        settingForm.value = { ...data.meta.appConfig };
+                        document.title = `${appConfig.value.name} - ExecTrack`;
+                    }
+                    
+                    if(currentView.value === 'dashboard') nextTick(() => renderCharts());
+                } catch(e) {}
+                finally { isLoading.value = false; }
+            };
+
+            const openTaskModal = (task = null) => {
+                if (task) {
+                    // Deep copy to prevent binding issues before save
+                    editingTask.value = JSON.parse(JSON.stringify(task));
+                    // Format dates for input[type="date"]
+                    if(editingTask.value.order_date) editingTask.value.order_date = editingTask.value.order_date.split('T')[0];
+                    if(editingTask.value.due_date) editingTask.value.due_date = editingTask.value.due_date.split('T')[0];
+                } else {
+                    editingTask.value = {
+                        status: 'Pending',
+                        progress_percent: 0,
+                        priority: 'Medium'
+                    };
+                }
+                showFormModal.value = true;
+            };
+
+            const saveTask = async () => {
+                isLoading.value = true;
+                try {
+                    await apiCall('saveTask', editingTask.value);
+                    showFormModal.value = false;
+                    Swal.fire({ title: 'สำเร็จ', text: 'บันทึกข้อมูลเรียบร้อยแล้ว', icon: 'success', timer: 1500, showConfirmButton: false });
+                    await loadInitialData();
+                } catch(e) {}
+                finally { isLoading.value = false; }
+            };
+
+            const viewTask = async (task) => {
+                selectedTask.value = task;
+                quickUpdate.value = { status: task.status, percent: task.progress_percent };
+                taskTimeline.value = [];
+                showDetailModal.value = true;
+                try {
+                    taskTimeline.value = await apiCall('getTaskTimeline', { task_id: task.task_id });
+                } catch(e) { console.error("Could not load timeline"); }
+            };
+
+            const submitQuickUpdate = async () => {
+                isLoading.value = true;
+                try {
+                    await apiCall('updateTaskStatus', {
+                        task_id: selectedTask.value.task_id,
+                        status: quickUpdate.value.status,
+                        progress_percent: quickUpdate.value.percent,
+                        remark: 'อัปเดตความคืบหน้าด่วน'
+                    });
+                    showDetailModal.value = false;
+                    Swal.fire({ title: 'สำเร็จ', text: 'อัปเดตสถานะเรียบร้อยแล้ว', icon: 'success', timer: 1500, showConfirmButton: false });
+                    await loadInitialData();
+                } catch(e) {}
+                finally { isLoading.value = false; }
+            };
+
+            const deleteTask = async (task) => {
+                const confirm = await Swal.fire({
+                    title: 'ยืนยันการลบ?', text: `คุณต้องการลบงาน ${task.task_code} ใช่หรือไม่?`,
+                    icon: 'warning', showCancelButton: true, confirmButtonColor: '#d33', confirmButtonText: 'ใช่, ลบเลย'
+                });
+                
+                if(confirm.isConfirmed) {
+                    isLoading.value = true;
+                    try {
+                        await apiCall('deleteTask', { task_id: task.task_id });
+                        showDetailModal.value = false;
+                        await loadInitialData();
+                        Swal.fire('ลบแล้ว!', 'ข้อมูลถูกลบเรียบร้อย', 'success');
+                    } catch(e) {}
+                    finally { isLoading.value = false; }
+                }
+            };
+
+            // Settings Upload & Save
+            const handleLogoUpload = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                
+                // บีบอัดภาพเพื่อไม่ให้เกินข้อจำกัด 50,000 characters ของ Google Sheets Cell
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        const MAX_WIDTH = 250; // ความกว้างสูงสุด
+                        const scaleSize = MAX_WIDTH / img.width;
+                        canvas.width = MAX_WIDTH;
+                        canvas.height = img.height * scaleSize;
+                        
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                        
+                        // แปลงกลับเป็น Base64 (Quality 0.8)
+                        settingForm.value.logo = canvas.toDataURL('image/jpeg', 0.8);
+                    }
+                    img.src = event.target.result;
+                };
+                reader.readAsDataURL(file);
+            };
+
+            const saveSystemSettings = async () => {
+                isLoading.value = true;
+                try {
+                    await apiCall('saveSettings', settingForm.value);
+                    Swal.fire({ title: 'สำเร็จ', text: 'บันทึกการตั้งค่าเรียบร้อยแล้ว', icon: 'success', timer: 1500, showConfirmButton: false });
+                    await loadInitialData(); // โหลดข้อมูลใหม่เพื่ออัปเดต UI
+                } catch(e) {}
+                finally { isLoading.value = false; }
+            };
+
+            // Helpers
+            const canEditTask = (task) => {
+                if(!user.value) return false;
+                if(user.value.role === 'Admin' || user.value.role === 'Secretary') return true;
+                if(user.value.role === 'Owner' && task.assigned_unit === user.value.unit) return true;
+                return false;
+            };
+
+            const formatDate = (dateString) => {
+                if (!dateString) return '-';
+                const d = new Date(dateString);
+                return d.toLocaleDateString('th-TH', { year: '2-digit', month: 'short', day: 'numeric' });
+            };
+            
+            const formatDateTime = (dateString) => {
+                if (!dateString) return '-';
+                const d = new Date(dateString);
+                return d.toLocaleDateString('th-TH', { month: 'short', day: 'numeric', hour: '2-digit', minute:'2-digit' });
+            };
+
+            const isOverdue = (task) => {
+                if(task.status === 'Completed' || task.status === 'Cancelled') return false;
+                return new Date(task.due_date) < new Date();
+            };
+
+            const statusThai = (status) => {
+                const map = { 'Pending':'รอดำเนินการ', 'In Progress':'กำลังทำ', 'Review':'รอตรวจรับ', 'Completed':'เสร็จสิ้น', 'Cancelled':'ยกเลิก' };
+                return map[status] || status;
+            };
+
+            const statusColorClass = (status) => {
+                const map = {
+                    'Pending': 'bg-gray-100 text-gray-800',
+                    'In Progress': 'bg-blue-100 text-blue-800',
+                    'Review': 'bg-yellow-100 text-yellow-800',
+                    'Completed': 'bg-green-100 text-green-800',
+                    'Cancelled': 'bg-red-100 text-red-800'
+                };
+                return map[status] || 'bg-gray-100 text-gray-800';
+            };
+
+            // Chart.js Setup
+            let charts = {};
+            const renderCharts = () => {
+                if(currentView.value !== 'dashboard') return;
+                
+                // Destroy old charts if exist
+                if(charts.status) charts.status.destroy();
+                if(charts.unit) charts.unit.destroy();
+
+                const ctxStatus = document.getElementById('statusChart');
+                const ctxUnit = document.getElementById('unitChart');
+                if(!ctxStatus || !ctxUnit) return;
+
+                // Data for Status Chart
+                const statusCounts = { 'Pending':0, 'In Progress':0, 'Review':0, 'Completed':0 };
+                tasks.value.forEach(t => { if(statusCounts[t.status] !== undefined) statusCounts[t.status]++; });
+
+                charts.status = new Chart(ctxStatus, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['รอดำเนินการ', 'กำลังทำ', 'รอตรวจรับ', 'เสร็จสิ้น'],
+                        datasets: [{
+                            data: [statusCounts['Pending'], statusCounts['In Progress'], statusCounts['Review'], statusCounts['Completed']],
+                            backgroundColor: ['#e5e7eb', '#809bce', '#fde68a', '#bbf7d0'], /* โทนพาสเทลสำหรับกราฟสถานะ */
+                            borderWidth: 0
+                        }]
+                    },
+                    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right' } } }
+                });
+
+                // Data for Unit Chart
+                const unitCounts = {};
+                tasks.value.forEach(t => {
+                    if(t.assigned_unit) {
+                        unitCounts[t.assigned_unit] = (unitCounts[t.assigned_unit] || 0) + 1;
+                    }
+                });
+
+                charts.unit = new Chart(ctxUnit, {
+                    type: 'bar',
+                    data: {
+                        labels: Object.keys(unitCounts),
+                        datasets: [{
+                            label: 'จำนวนงาน',
+                            data: Object.values(unitCounts),
+                            backgroundColor: '#809bce', /* สีฟ้าพาสเทล */
+                            borderRadius: 4
+                        }]
+                    },
+                    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+                });
+            };
+
+            // Init Kanban Sortable (Must run when view changes to kanban)
+            const initKanban = () => {
+                if(user.value?.role === 'Executive') return; // Read-only for Executive
+                
+                nextTick(() => {
+                    document.querySelectorAll('.kanban-column').forEach(el => {
+                        Sortable.create(el, {
+                            group: 'kanban',
+                            animation: 150,
+                            ghostClass: 'ghost-card',
+                            onEnd: async function (evt) {
+                                const itemEl = evt.item;
+                                const newStatus = evt.to.dataset.status;
+                                const oldStatus = evt.from.dataset.status;
+                                const taskId = itemEl.dataset.id;
+                                
+                                if (newStatus !== oldStatus) {
+                                    // Update local state immediately for UX
+                                    const task = tasks.value.find(t => t.task_id === taskId);
+                                    if(task) task.status = newStatus;
+                                    
+                                    // Call API in background
+                                    try {
+                                        await apiCall('updateTaskStatus', { task_id: taskId, status: newStatus });
+                                        loadInitialData(); // Sync full data silently
+                                    } catch(e) {
+                                        // Revert on fail
+                                        if(task) task.status = oldStatus;
+                                    }
+                                }
+                            }
+                        });
+                    });
+                });
+            };
+
+            // Watchers
+            watch(currentView, (newVal) => {
+                if(newVal === 'dashboard') nextTick(renderCharts);
+                if(newVal === 'kanban') nextTick(initKanban);
+            });
+
+            // Lifecycle
+            onMounted(() => {
+                if(user.value) loadInitialData();
+                
+                // Register Service Worker for PWA
+                if ('serviceWorker' in navigator) {
+                    navigator.serviceWorker.register('sw.js').catch(err => console.log('SW registration failed:', err));
+                }
+            });
+
+            return {
+                user, loginEmail, isLoading, currentView, tasks, meta, filteredTasks, appConfig, settingForm,
+                stats, overdueTasks, searchQuery, filterUnit, filterPriority,
+                kanbanColumns, showFormModal, showDetailModal, editingTask, selectedTask, taskTimeline, quickUpdate, canCreateTask,
+                login, logout, openTaskModal, saveTask, viewTask, submitQuickUpdate, deleteTask, canEditTask, saveSystemSettings, handleLogoUpload,
+                formatDate, formatDateTime, isOverdue, statusThai, statusColorClass
+            };
+        }
+    });
+
+    // -------------------------------------------------------------
+    // VUE COMPONENTS
+    // -------------------------------------------------------------
+
+    app.component('nav-item', {
+        props: ['icon', 'text', 'view', 'current'],
+        template: `
+            <button @click="$emit('change')" class="flex items-center gap-3 px-4 py-3 rounded-xl transition-all text-sm font-semibold text-left w-full"
+                    :class="current === view ? 'bg-blue-50 text-primary' : 'text-gray-600 hover:bg-gray-50'">
+                <i :class="['ph-bold text-xl', icon, current === view ? 'text-primary' : '']"></i> {{ text }}
+            </button>
+        `
+    });
+
+    app.component('mobile-nav-item', {
+        props: ['icon', 'text', 'view', 'current'],
+        template: `
+            <button @click="$emit('change')" class="flex flex-col items-center justify-center w-full transition"
+                    :class="current === view ? 'text-primary' : 'text-gray-400'">
+                <i :class="['ph-fill text-2xl mb-1', icon]"></i>
+                <span class="text-[10px] font-bold">{{ text }}</span>
+            </button>
+        `
+    });
+
+    app.component('stat-card', {
+        props: ['title', 'value', 'icon', 'color'],
+        template: `
+            <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between">
+                <div>
+                    <p class="text-sm text-gray-500 font-medium mb-1">{{ title }}</p>
+                    <p class="text-3xl font-bold text-gray-800">{{ value }}</p>
+                </div>
+                <div :class="['w-12 h-12 rounded-full flex items-center justify-center text-2xl', 'bg-'+color+'-100', 'text-'+color+'-600']">
+                    <i :class="['ph-duotone', icon]"></i>
+                </div>
+            </div>
+        `
+    });
+
+    app.component('kanban-col', {
+        props: ['title', 'color', 'icon', 'status', 'tasks'],
+        template: `
+            <div class="min-w-[280px] w-[280px] bg-gray-100/50 rounded-2xl flex flex-col max-h-[calc(100vh-180px)] border border-gray-200">
+                <div class="p-3 border-b border-gray-200 flex items-center justify-between bg-gray-50 rounded-t-2xl">
+                    <div class="flex items-center gap-2">
+                        <span :class="['px-2 py-1 rounded text-xs font-bold flex items-center gap-1', color]">
+                            <i :class="['ph-fill', icon]"></i> {{ title }}
+                        </span>
+                    </div>
+                    <span class="text-xs font-bold bg-white px-2 py-1 rounded-full shadow-sm">{{ tasks.length }}</span>
+                </div>
+                
+                <div class="p-3 flex-1 overflow-y-auto kanban-column no-scrollbar space-y-3" :data-status="status">
+                    
+                    <div v-for="t in tasks" :key="t.task_id" :data-id="t.task_id" class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 cursor-grab active:cursor-grabbing hover:shadow-md transition">
+                        <div class="flex justify-between items-start mb-2">
+                            <span class="text-[10px] font-mono bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{{ t.task_code }}</span>
+                            <span v-if="t.priority==='High'" class="text-red-500"><i class="ph-fill ph-flag"></i></span>
+                        </div>
+                        <h4 class="font-semibold text-sm text-gray-800 leading-tight mb-2">{{ t.title }}</h4>
+                        <div class="flex items-center justify-between mt-3 text-xs text-gray-500">
+                            <div class="flex items-center gap-1 bg-gray-50 px-2 py-1 rounded">
+                                <i class="ph-fill ph-buildings"></i> <span class="truncate max-w-[80px]">{{ t.assigned_unit }}</span>
+                            </div>
+                            <div class="font-bold" :class="isOverdue(t) ? 'text-red-500' : ''">
+                                <i class="ph ph-calendar-blank"></i> {{ formatDate(t.due_date) }}
+                            </div>
+                        </div>
+                        <!-- Progress mini bar -->
+                        <div class="w-full bg-gray-100 rounded-full h-1 mt-3">
+                            <div class="bg-primary h-1 rounded-full" :style="{ width: (t.progress_percent || 0) + '%' }"></div>
+                        </div>
+                        
+                        <button @click="$emit('view-task', t)" class="mt-3 w-full py-1.5 bg-gray-50 hover:bg-gray-100 text-xs font-semibold text-gray-600 rounded-lg transition border border-gray-200">
+                            ดูรายละเอียด
+                        </button>
+                    </div>
+                    
+                    <div v-if="tasks.length === 0" class="text-center p-4 text-xs text-gray-400 border-2 border-dashed border-gray-200 rounded-xl pointer-events-none">
+                        ไม่มีงานในสถานะนี้
+                    </div>
+                </div>
+            </div>
+        `,
+        methods: {
+            formatDate(dStr) {
+                if(!dStr) return '';
+                return new Date(dStr).toLocaleDateString('th-TH', {day:'numeric', month:'short'});
+            },
+            isOverdue(t) {
+                return t.status !== 'Completed' && new Date(t.due_date) < new Date();
+            }
+        }
+    });
+
+    app.mount('#app');
+</script>
+</html>
